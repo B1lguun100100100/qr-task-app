@@ -107,8 +107,8 @@
     let scanner = null;
     let lastPayload = null;
 
-    function openFormAndFill(data) {
-      // Open form
+    function openFormAndFill(data) { //Es fuellt die Form automatisch auf.
+
       taskForm.classList.remove("hidden");
       formHint.classList.add("hidden");
 
@@ -179,7 +179,9 @@
           openFormAndFill(parsed);
 
           // Optional: stop camera after successful scan
-           scanner.stop();
+          scanner.stop();
+          scanner = null;
+
         }, { highlightScanRegion: true });
 
         // Prefer back camera on phones
@@ -192,9 +194,17 @@
     }
 
     function stopCamera() {
-      if (scanner) scanner.stop();
+      if (scanner) {
+        scanner.stop();
+        scanner.destroy();
+        scanner = null;
+        }
+      if(video.srcObject){
+        video.srcObject.getTracks().forEach(track => track.stop());
+        video.srcObject = null;
+      }
       scanStatus.textContent = "Camera stopped.";
-      scanStatus.className = "muted";
+      scanStatus.className = "muted"  
     }
 
     startBtn.addEventListener("click", startCamera);
@@ -267,4 +277,3 @@
   </script>
 </body>
 </html>
-
