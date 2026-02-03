@@ -1,0 +1,269 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>QR Task Creator</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 900px; margin: 24px auto; padding: 0 16px; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; }
+    label { display:block; margin-top: 10px; font-weight: 600; }
+    input, textarea, button { width: 100%; padding: 10px; margin-top: 6px; border-radius: 10px; border: 1px solid #ccc; }
+    textarea { min-height: 90px; resize: vertical; }
+    button { cursor: pointer; border: none; }
+    .btn { background: #111; color: #fff; }
+    .btn2 { background: #eaeaea; }
+    .muted { color:#666; font-size: 13px; }
+    .ok { color: #0a7a2f; font-weight: 600; }
+    .err { color: #b00020; font-weight: 600; }
+    video { width: 100%; border-radius: 12px; background: #000; }
+    .hidden { display:none; }
+    .preview { margin-top: 10px; }
+    .preview img { max-width: 100%; border-radius: 12px; border: 1px solid #ddd; }
+    code { background: #f5f5f5; padding: 2px 6px; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <h1>QR → Task Create</h1>
+  <p class="muted">
+    QR should contain JSON like:
+    <code>{"storeId":"102","assetId":"CM-8891","assetName":"Coffee Machine"}</code>
+    (or querystring like <code>storeId=102&assetId=CM-8891</code>)
+  </p>
+
+  <div class="row">
+    <div class="card">
+      <h2>1) Scan QR</h2>
+      <video id="video" playsinline></video>
+      <div style="display:flex; gap:10px; margin-top:12px;">
+        <button class="btn" id="startBtn">Start Camera</button>
+        <button class="btn2" id="stopBtn">Stop</button>
+      </div>
+      <p id="scanStatus" class="muted">Waiting…</p>
+      <p class="muted">
+        Tip: If camera doesn’t open, use <b>HTTPS</b> or <b>localhost</b>.
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>2) Create Task</h2>
+
+      <form id="taskForm" class="hidden">
+        <label>Store ID</label>
+        <input id="storeId" name="storeId" placeholder="Auto-filled" required />
+
+        <label>Asset ID</label>
+        <input id="assetId" name="assetId" placeholder="Auto-filled" required />
+
+        <label>Asset Name (optional)</label>
+        <input id="assetName" name="assetName" placeholder="Auto-filled if present" />
+
+        <label>Explanation <span class="err">*</span></label>
+        <textarea id="explanation" name="explanation" placeholder="Describe the issue..." required></textarea>
+
+        <label>Add Photo (optional)</label>
+        <input id="photo" name="photo" type="file" accept="image/*" capture="environment" />
+        <div class="preview" id="preview"></div>
+
+        <div style="display:flex; gap:10px; margin-top:12px;">
+          <button class="btn" type="submit">Submit Task</button>
+          <button class="btn2" type="button" id="clearBtn">Clear</button>
+        </div>
+
+        <p id="submitStatus" class="muted"></p>
+      </form>
+
+      <div id="formHint" class="muted">
+        Scan a QR code to open the task form automatically.
+      </div>
+    </div>
+  </div>
+
+  <!-- QR Scanner library (pure front-end) -->
+  <script src="https://cdn.jsdelivr.net/npm/qr-scanner@1.4.2/qr-scanner.umd.min.js"></script>
+
+  <script>
+    const video = document.getElementById("video");
+    const startBtn = document.getElementById("startBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const scanStatus = document.getElementById("scanStatus");
+
+    const taskForm = document.getElementById("taskForm");
+    const formHint = document.getElementById("formHint");
+
+    const storeIdEl = document.getElementById("storeId");
+    const assetIdEl = document.getElementById("assetId");
+    const assetNameEl = document.getElementById("assetName");
+    const explanationEl = document.getElementById("explanation");
+
+    const photoEl = document.getElementById("photo");
+    const preview = document.getElementById("preview");
+
+    const clearBtn = document.getElementById("clearBtn");
+    const submitStatus = document.getElementById("submitStatus");
+
+    let scanner = null;
+    let lastPayload = null;
+
+    function openFormAndFill(data) {
+      // Open form
+      taskForm.classList.remove("hidden");
+      formHint.classList.add("hidden");
+
+      // Fill fields if present
+      if (data.storeId) storeIdEl.value = data.storeId;
+      if (data.assetId) assetIdEl.value = data.assetId;
+      if (data.assetName) assetNameEl.value = data.assetName;
+
+      // Focus explanation to speed up workflow
+      explanationEl.focus();
+    }
+
+    function parseQrPayload(text) {
+      // 1) Try JSON
+      try {
+        const obj = JSON.parse(text);
+        return {
+          storeId: obj.storeId || obj.store || obj.storeCode || "",
+          assetId: obj.assetId || obj.asset || obj.id || "",
+          assetName: obj.assetName || obj.name || ""
+        };
+      } catch (e) {}
+
+      // 2) Try URL / querystring (storeId=...&assetId=...)
+      try {
+        // If it's a URL, take its searchParams; else treat as query string
+        let params;
+        if (text.includes("://")) {
+          const url = new URL(text);
+          params = url.searchParams;
+        } else {
+          params = new URLSearchParams(text);
+        }
+        return {
+          storeId: params.get("storeId") || params.get("store") || params.get("storeCode") || "",
+          assetId: params.get("assetId") || params.get("asset") || params.get("id") || "",
+          assetName: params.get("assetName") || params.get("name") || ""
+        };
+      } catch (e) {}
+
+      // 3) Fallback: plain text (not ideal)
+      return { storeId: "", assetId: text.trim(), assetName: "" };
+    }
+
+    async function startCamera() {
+      scanStatus.textContent = "Starting camera…";
+      scanStatus.className = "muted";
+      if (!scanner) {
+        scanner = new QrScanner(video, (result) => {
+          const text = result?.data || "";
+          if (!text) return;
+
+          // Avoid repeated triggers from same QR
+          if (text === lastPayload) return;
+          lastPayload = text;
+
+          const parsed = parseQrPayload(text);
+
+          if (!parsed.storeId || !parsed.assetId) {
+            scanStatus.textContent = "QR scanned, but missing storeId/assetId. Check QR format.";
+            scanStatus.className = "err";
+            openFormAndFill(parsed); // still open so user can fix
+            return;
+          }
+
+          scanStatus.textContent = "Scanned ✓ Form opened & auto-filled.";
+          scanStatus.className = "ok";
+          openFormAndFill(parsed);
+
+          // Optional: stop camera after successful scan
+          // scanner.stop();
+        }, { highlightScanRegion: true });
+
+        // Prefer back camera on phones
+        QrScanner.setCamera("environment");
+      }
+
+      await scanner.start();
+      scanStatus.textContent = "Camera on — point at a QR code.";
+      scanStatus.className = "muted";
+    }
+
+    function stopCamera() {
+      if (scanner) scanner.stop();
+      scanStatus.textContent = "Camera stopped.";
+      scanStatus.className = "muted";
+    }
+
+    startBtn.addEventListener("click", startCamera);
+    stopBtn.addEventListener("click", stopCamera);
+
+    photoEl.addEventListener("change", () => {
+      preview.innerHTML = "";
+      const file = photoEl.files?.[0];
+      if (!file) return;
+
+      const img = document.createElement("img");
+      img.src = URL.createObjectURL(file);
+      preview.appendChild(img);
+    });
+
+    clearBtn.addEventListener("click", () => {
+      storeIdEl.value = "";
+      assetIdEl.value = "";
+      assetNameEl.value = "";
+      explanationEl.value = "";
+      photoEl.value = "";
+      preview.innerHTML = "";
+      submitStatus.textContent = "";
+      lastPayload = null;
+
+      taskForm.classList.add("hidden");
+      formHint.classList.remove("hidden");
+    });
+
+    taskForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      submitStatus.textContent = "Submitting…";
+
+      // Build payload
+      const payload = {
+        storeId: storeIdEl.value.trim(),
+        assetId: assetIdEl.value.trim(),
+        assetName: assetNameEl.value.trim(),
+        explanation: explanationEl.value.trim(),
+        createdAt: new Date().toISOString()
+      };
+
+      // OPTIONAL: attach image as base64 (simple demo)
+      const file = photoEl.files?.[0];
+      if (file) {
+        payload.photo = await fileToBase64(file);
+        payload.photoName = file.name;
+        payload.photoType = file.type;
+      }
+
+      // TODO: Replace with your real API endpoint
+      // Example:
+      // const API_URL = "https://your-portal.example.com/api/tasks";
+      // const res = await fetch(API_URL, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(payload) });
+      // if (!res.ok) throw new Error("API failed");
+      // const data = await res.json();
+
+      console.log("Task payload:", payload);
+      submitStatus.textContent = "✅ Submitted (demo). Check browser console for payload.";
+    });
+
+    function fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+  </script>
+</body>
+</html>
